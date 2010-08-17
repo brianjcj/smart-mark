@@ -234,7 +234,7 @@ f   find a char forward and mark orig pos to new pos;
 F   find a char backward and mark orig pos to new pos;
 ?   help
 
-And you can type a optional number (0-9) before ()[]<>.
+And you can type an optional number (0-9) before ()[]<>.
 Try it to see the effect :)
 
 "))
