@@ -267,7 +267,9 @@ Try it to see the effect :)
                                                (goto-char pos))
                                            (goto-char pos)))))
                                  (t
-                                  (smart-mark-1 t pos)))))
+                                  (let ((forward-sexp-function nil))
+                                           (unless (smart-mark-1 t pos)
+                                             (goto-char pos)))))))
                (cond (syntax-mod-need
                       (set-char-table-parent myutils-temp-syntax-table (syntax-table))
                       (with-syntax-table
