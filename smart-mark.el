@@ -4,7 +4,7 @@
 
 ;; Author: Brian Jiang <brianjcj@gmail.com>
 ;; Keywords: completion, convenience
-;; Version: 0.1
+;; Version: 0.1b
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -35,6 +35,8 @@
 
 (provide 'smart-mark)
 
+(require 'thingatpt)
+
 (defvar smart-mark-chars-open  (list ?\( ?\< ?\{ ?\[ ))
 (defvar smart-mark-chars-close (list ?\) ?\> ?\} ?\] ))
 (defvar smart-mark-chars-quote (list ?\" ?\' ))
@@ -53,14 +55,23 @@
 (modify-syntax-entry ?\> ")" myutils-temp-syntax-table)
 (modify-syntax-entry ?\[ "(" myutils-temp-syntax-table)
 (modify-syntax-entry ?\] ")" myutils-temp-syntax-table)
+(modify-syntax-entry ?\\ "\\" myutils-temp-syntax-table)
 
 
 (defun smart-mark-1 (&optional adjust pos)
   (let* ((c (char-after))
-         (range (mouse-start-end (point) (point) 1))
-         (b (car range))
-         (e (nth 1 range))
-         start end)
+         range
+         ;; (range (mouse-start-end (point) (point) 1))
+         b e start end)
+
+    (if (memq c smart-mark-chars-quote)
+        (progn (setq range (bounds-of-thing-at-point 'sexp))
+               (setq b (car range))
+               (setq e (cdr range))
+               )
+      (setq range (mouse-start-end (point) (point) 1))
+      (setq b (car range))
+      (setq e (nth 1 range)))
     
     (unless (or (and (< pos b) (< pos e)) ;; out of range
                 (and (> pos b) (> pos e)) ;; out of range
@@ -117,15 +128,64 @@
   (backward-up-list)
   (smart-mark-1 t (point)))
 
+(defun smart-mark-find-real-quote (c)
+  (while (and (re-search-forward (concat "\\(\\s\\*\\)" (string c)))
+              (/= 0 (mod (- (match-end 1) (match-beginning 1)) 2))))
+  (backward-char))
+
+(defun smart-mark-find-char-1 (s-fn)
+  (let (c)
+    (catch 'loo
+      (while t
+        (setq c (read-char "find char (type RET to finish) : "))
+        (when (= c ?\r)
+          (throw 'loo t))
+        (unless mark-active
+             (set-mark (point)))
+        (funcall s-fn (string c) nil t)))))
+
+(defun smart-mark-whole-sexp ()
+  "Mark whole sexp."
+  (interactive)
+  (let ((region (bounds-of-thing-at-point 'sexp)))
+    (if (not region)
+        (message "Can not found sexp.")
+      (set-mark (car region))
+      (forward-sexp))))
+
+(defun smart-mark-up-list (c level)
+  (let ((pos (point)))
+    (catch 'loo
+      (while t
+        (condition-case nil
+            (backward-up-list)
+          (error
+           (goto-char pos)
+           (throw 'loo t)))
+        (when (= c (char-after))
+          (setq pos (point))
+          (setq level (1- level)))
+        (when (= level 0)
+          (throw 'loo t))))
+    (goto-char pos)))
 
 (defun smart-mark ()
   (interactive)
   (let ((cc (char-after))
+        (num 1)
+        (prompt
+         "Select a command (',\",(,),{,},[,],<,>,t,l,a,e,m,n,s,RET; type ? for help) : ")
         (pos (point))
-        c c-t search? done?)
-    (setq c
-          (read-char
-           "Select a command (', \", (, ), {, }, [, ], <, >, t, l, a, e, m, n, RET; type ? for help) : "))
+        c c-t search? done? config)
+    
+    (setq c (read-char prompt))
+
+    (when (and (>= c ?0) (<= c ?9))
+      (setq num (- c ?0))
+      (when (= num 0)
+        (setq num -1))
+      (setq c (read-char prompt)))
+    
     (unless (or (= c cc)
                 (= c ?n)
                 (and (setq c-t (cdr (assoc c  smart-mark-chars-pairs)))
@@ -150,29 +210,36 @@
           ((= c ?m)
            (smart-mark-mark-current-list))
           ((= c ?f)
-           (setq c-t (read-char "find char: "))
-           (unless mark-active
-             (set-mark pos))
-           (search-forward (string c-t)))
+           (smart-mark-find-char-1 'search-forward))
           ((= c ?F)
-           (setq c-t (read-char "find char: "))
-           (unless mark-active
-             (set-mark pos))
-           (search-backward (string c-t)))
+           (smart-mark-find-char-1 'search-backward))
+          ((= c ?s)
+           (smart-mark-whole-sexp))
           ((= c ?\?)
-           (with-output-to-temp-buffer "*smart-mark*"
-             (princ "()[]<>\"\'   as you know;
+           (setq config (current-window-configuration))
+           (unwind-protect
+               (progn
+                 (with-output-to-temp-buffer "*smart-mark*"
+                   (princ "()[]<>\"\'   as you know;
 m   mark current list;
 n   mark according to the char under cursor;
 t   mark tag content;
 l   mark line;
+s   mark sexp;
 a   mark from current pos to beginning of the line;
 e   mark from current pos to end of the line;
 RET mark word;
 w   mark word;
 f   find a char forward and mark orig pos to new pos;
 F   find a char backward and mark orig pos to new pos;
-?   help")))
+?   help
+
+And you can type a optional number (0-9) before ()[]<>.
+Try it to see the effect :)
+
+"))
+                 (setq c (read-char "Type any key to close this window.")))
+             (set-window-configuration config)))
           (t
            (let ((cs (char-syntax c))
                  syntax-mod-need meta-char)
@@ -186,12 +253,15 @@ F   find a char backward and mark orig pos to new pos;
              (flet ((s-n-m ()
                            (cond (search?
                                   (cond ((memq c smart-mark-chars-quote)
-                                         (forward-sexp)
-                                         (unless (smart-mark-1 t pos)
-                                           (goto-char pos)))
+                                         (smart-mark-find-real-quote c)
+                                         (let ((forward-sexp-function nil))
+                                           (unless (smart-mark-1 t pos)
+                                             (goto-char pos))))
                                         (t
                                          (ignore-errors
-                                           (while (progn (backward-up-list) (/= c (char-after)))))
+                                           (smart-mark-up-list c num)
+                                           ;; (while (progn (backward-up-list) (/= c (char-after))))
+                                           )
                                          (if (= c (char-after))
                                              (unless (smart-mark-1 t pos)
                                                (goto-char pos))
