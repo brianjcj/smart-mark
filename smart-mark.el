@@ -65,15 +65,16 @@
          b e start end)
 
     (if (memq c smart-mark-chars-quote)
-        (progn (setq range (bounds-of-thing-at-point 'sexp))
-               (setq b (car range))
-               (setq e (cdr range))
-               )
-      (setq range (mouse-start-end (point) (point) 1))
-      (setq b (car range))
-      (setq e (nth 1 range)))
+        (and (setq range (bounds-of-thing-at-point 'sexp))
+             (setq b (car range))
+             (setq e (cdr range)))
+      (and
+       (setq range (mouse-start-end (point) (point) 1))
+       (setq b (car range))
+       (setq e (nth 1 range))))
     
-    (unless (or (and (< pos b) (< pos e)) ;; out of range
+    (unless (or (not range)
+                (and (< pos b) (< pos e)) ;; out of range
                 (and (> pos b) (> pos e)) ;; out of range
                 )
       (when (and adjust (not (eq major-mode 'emacs-lisp-mode))
@@ -103,35 +104,41 @@
                  (setq e start
                        b end)))))
       (unless (= b e)
-        (set-mark b)
+        (push-mark b nil t)
         (goto-char e)))))
 
 (defun smart-mark-line ()
   (interactive)
-  (set-mark (line-beginning-position))
+  (push-mark (line-beginning-position) nil t)
   (goto-char (line-end-position)))
 
 (defun smart-mark-to-line-start ()
   (interactive)
-  (set-mark (point))
+  (push-mark (point) nil  t)
   (goto-char (line-beginning-position)))
 
 (defun smart-mark-to-line-end ()
   (interactive)
-  (set-mark (point))
+  (push-mark nil (point) t)
   (goto-char (line-end-position)))
 
-(defun smart-mark-mark-current-list ()
+(defun smart-mark-mark-current-list (&optional level)
   (interactive)
   (when (memq (char-after) smart-mark-chars-open)
     (forward-char))
-  (backward-up-list)
+  (ignore-errors
+    (if (= level -1)
+        (while t (backward-up-list 99999))
+      (backward-up-list level)))
   (smart-mark-1 t (point)))
 
 (defun smart-mark-find-real-quote (c)
-  (while (and (re-search-forward (concat "\\(\\s\\*\\)" (string c)))
-              (/= 0 (mod (- (match-end 1) (match-beginning 1)) 2))))
-  (backward-char))
+  (let (not-q)
+    (while (and (re-search-forward (concat "\\(\\s\\*\\)" (string c)) nil t)
+                (setq not-q (/= 0 (mod (- (match-end 1) (match-beginning 1)) 2)))))
+    (unless not-q
+      (backward-char)
+      t)))
 
 (defun smart-mark-find-char-1 (s-fn)
   (let (c)
@@ -141,7 +148,7 @@
         (when (= c ?\r)
           (throw 'loo t))
         (unless mark-active
-             (set-mark (point)))
+             (push-mark (point) nil t))
         (funcall s-fn (string c) nil t)))))
 
 (defun smart-mark-whole-sexp ()
@@ -150,7 +157,7 @@
   (let ((region (bounds-of-thing-at-point 'sexp)))
     (if (not region)
         (message "Can not found sexp.")
-      (set-mark (car region))
+      (push-mark (car region) nil t)
       (forward-sexp))))
 
 (defun smart-mark-up-list (c level)
@@ -169,58 +176,7 @@
           (throw 'loo t))))
     (goto-char pos)))
 
-(defun smart-mark ()
-  (interactive)
-  (let ((cc (char-after))
-        (num 1)
-        (prompt
-         "Select a command (',\",(,),{,},[,],<,>,t,l,a,e,m,n,s,RET; type ? for help) : ")
-        (pos (point))
-        c c-t search? done? config)
-    
-    (setq c (read-char prompt))
-
-    (when (and (>= c ?0) (<= c ?9))
-      (setq num (- c ?0))
-      (when (= num 0)
-        (setq num -1))
-      (setq c (read-char prompt)))
-    
-    (unless (or (= c cc)
-                (= c ?n)
-                (and (setq c-t (cdr (assoc c  smart-mark-chars-pairs)))
-                     (= cc c)))
-      (setq search? t))
-
-    (cond ((= c ?t)
-           (unless (smart-mark-tag)
-             (goto-char pos)))
-          ((= c ?l)
-           (smart-mark-line))
-          ((= c ?a)
-           (smart-mark-to-line-start))
-          ((= c ?e)
-           (smart-mark-to-line-end))
-          ((or (= c ?\r) (= c ?w))
-           (when (looking-at "[\n\t\s]")
-             (skip-chars-backward "[\t\s]")
-             (unless (looking-at "^")
-               (backward-char)))
-           (smart-mark-1 nil (point)))
-          ((= c ?m)
-           (smart-mark-mark-current-list))
-          ((= c ?f)
-           (smart-mark-find-char-1 'search-forward))
-          ((= c ?F)
-           (smart-mark-find-char-1 'search-backward))
-          ((= c ?s)
-           (smart-mark-whole-sexp))
-          ((= c ?\?)
-           (setq config (current-window-configuration))
-           (unwind-protect
-               (progn
-                 (with-output-to-temp-buffer "*smart-mark*"
-                   (princ "()[]<>\"\'   as you know;
+(defvar smart-mark-help-text "()[]<>\"\'   as you know;
 m   mark current list;
 n   mark according to the char under cursor;
 t   mark tag content;
@@ -234,72 +190,137 @@ f   find a char forward and mark orig pos to new pos;
 F   find a char backward and mark orig pos to new pos;
 ?   help
 
-And you can type an optional number (0-9) before ()[]<>.
+And you can type an optional number (0-9) before ()[]<>m.
 Try it to see the effect :)
+")
 
-"))
-                 (setq c (read-char "Type any key to close this window.")))
-             (set-window-configuration config)))
-          (t
-           (let ((cs (char-syntax c))
-                 syntax-mod-need meta-char)
-             (cond ((memq c smart-mark-chars-quote)
-                    (setq syntax-mod-need (/= cs ?\")))
-                   ((memq c smart-mark-chars-open)
-                    (setq syntax-mod-need (/= cs ?\( )))
-                   ((memq c smart-mark-chars-close)
-                    (setq syntax-mod-need (/= cs ?\) )
-                          c (cdr (assoc c smart-mark-chars-pairs)))))
-             (flet ((s-n-m ()
-                           (cond (search?
-                                  (cond ((memq c smart-mark-chars-quote)
-                                         (smart-mark-find-real-quote c)
-                                         (let ((forward-sexp-function nil))
-                                           (unless (smart-mark-1 t pos)
-                                             (goto-char pos))))
-                                        (t
-                                         (ignore-errors
-                                           (smart-mark-up-list c num)
-                                           ;; (while (progn (backward-up-list) (/= c (char-after))))
-                                           )
-                                         (if (= c (char-after))
-                                             (unless (smart-mark-1 t pos)
-                                               (goto-char pos))
-                                           (goto-char pos)))))
-                                 (t
-                                  (let ((forward-sexp-function nil))
-                                           (unless (smart-mark-1 t pos)
-                                             (goto-char pos)))))))
-               (cond (syntax-mod-need
-                      (set-char-table-parent myutils-temp-syntax-table (syntax-table))
-                      (with-syntax-table
-                          myutils-temp-syntax-table
-                        (s-n-m)))
-                     (t
-                      (s-n-m)))))))))
+(defun smart-mark (&optional c-arg num-arg)
+  (interactive)
+  (catch 'exit
+    (let ((cc (char-after))
+          (num 1)
+          (prompt
+           "Select a command (',\",(,),{,},[,],<,>,t,l,a,e,m,n,s,RET; type ? for help) : ")
+          (pos (point))
+          c c-t search? done? config async)
+
+      (cond (c-arg
+             (setq c c-arg
+                   num num-arg))
+            (t
+             (setq c (read-char prompt))
+
+             (when (= c ?\?)
+               (setq config (current-window-configuration))
+               (unwind-protect
+                   (progn
+                     (with-output-to-temp-buffer "*smart-mark*"
+                       (princ smart-mark-help-text)))
+                 (setq c (setq c (read-char-exclusive prompt)))
+                 (set-window-configuration config))
+               (setq async t))
+    
+             (when (and (>= c ?0) (<= c ?9))
+               (setq num (- c ?0))
+               (when (= num 0)
+                 (setq num -1))
+               (setq c (read-char prompt)))
+
+             (when async
+               (run-with-timer 0 nil 'smart-mark c num)
+               (throw 'exit t))))
+    
+      (unless (and cc
+                   (or (= c cc)
+                       (= c ?n)
+                       (and (setq c-t (cdr (assoc c  smart-mark-chars-pairs)))
+                            (= cc c))))
+        (setq search? t))
+
+      (cond ((= c ?t)
+             (unless (smart-mark-tag)
+               (goto-char pos)))
+            ((= c ?l)
+             (smart-mark-line))
+            ((= c ?a)
+             (smart-mark-to-line-start))
+            ((= c ?e)
+             (smart-mark-to-line-end))
+            ((or (= c ?\r) (= c ?w))
+             (when (looking-at "[\n\t\s]")
+               (skip-chars-backward "[\t\s]")
+               (unless (looking-at "^")
+                 (backward-char)))
+             (smart-mark-1 nil (point)))
+            ((= c ?m)
+             (smart-mark-mark-current-list num))
+            ((= c ?f)
+             (smart-mark-find-char-1 'search-forward))
+            ((= c ?F)
+             (smart-mark-find-char-1 'search-backward))
+            ((= c ?s)
+             (smart-mark-whole-sexp))
+            (t
+             (let ((cs (char-syntax c))
+                   syntax-mod-need meta-char)
+               (cond ((memq c smart-mark-chars-quote)
+                      (setq syntax-mod-need (/= cs ?\")))
+                     ((memq c smart-mark-chars-open)
+                      (setq syntax-mod-need (/= cs ?\( )))
+                     ((memq c smart-mark-chars-close)
+                      (setq syntax-mod-need (/= cs ?\) )
+                            c (cdr (assoc c smart-mark-chars-pairs)))))
+               (flet ((s-n-m ()
+                             (cond (search?
+                                    (cond ((memq c smart-mark-chars-quote)
+                                           (when (smart-mark-find-real-quote c)
+                                             (let ((forward-sexp-function nil))
+                                               (unless (smart-mark-1 t pos)
+                                                 (goto-char pos)))))
+                                          (t
+                                           (ignore-errors
+                                             (smart-mark-up-list c num)
+                                             ;; (while (progn (backward-up-list) (/= c (char-after))))
+                                             )
+                                           (if (and (char-after) (= c (char-after)))
+                                               (unless (smart-mark-1 t pos)
+                                                 (goto-char pos))
+                                             (goto-char pos)))))
+                                   (t
+                                    (let ((forward-sexp-function nil))
+                                      (unless (smart-mark-1 t pos)
+                                        (goto-char pos)))))))
+                 (cond (syntax-mod-need
+                        (set-char-table-parent myutils-temp-syntax-table (syntax-table))
+                        (with-syntax-table
+                            myutils-temp-syntax-table
+                          (s-n-m)))
+                       (t
+                        (s-n-m))))))))))
 
 (defun smart-mark-tag ()
   (interactive)
   (require 'sgml-mode)
-  (let ((pos (point)) s e tag rs re)
-    (when (looking-at "<[^/]")
+  (ignore-errors
+    (let ((pos (point)) s e tag rs re)
+      (when (looking-at "<[^/]")
         (forward-char))
-    (mysgml-goto-open-tag-backward-1 1)
-    (setq s (point))
-    (sgml-skip-tag-forward 1)
-    (setq e (point))
-    (goto-char s)
-    (when (looking-at "<\\([^\s\t>]+\\)[^>]*>")
-      (setq tag (match-string 1))
-      (goto-char (match-end 0))
-      (setq rs (point))
-      (goto-char e)
-      (when (re-search-backward "</\\([^\s\t>]+\\)[^>]*>" nil t)
-        (when (string= tag (match-string 1))
-          (setq re (match-beginning 0))
-          (when (>= e pos)
-            (set-mark rs)
-            (goto-char re)))))))
+      (mysgml-goto-open-tag-backward-1 1)
+      (setq s (point))
+      (sgml-skip-tag-forward 1)
+      (setq e (point))
+      (goto-char s)
+      (when (looking-at "<\\([^\s\t>]+\\)[^>]*>")
+        (setq tag (match-string 1))
+        (goto-char (match-end 0))
+        (setq rs (point))
+        (goto-char e)
+        (when (re-search-backward "</\\([^\s\t>]+\\)[^>]*>" nil t)
+          (when (string= tag (match-string 1))
+            (setq re (match-beginning 0))
+            (when (>= e pos)
+              (push-mark rs nil t)
+              (goto-char re))))))))
 
 
 (defun mysgml-goto-open-tag-backward-1 (arg)
