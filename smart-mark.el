@@ -4,7 +4,7 @@
 
 ;; Author: Brian Jiang <brianjcj@gmail.com>
 ;; Keywords: completion, convenience
-;; Version: 0.1c
+;; Version: 0.1d
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -44,18 +44,18 @@
 (defvar smart-mark-chars-pairs (mapcar* 'cons smart-mark-chars-close smart-mark-chars-open))
 
 
-(defvar myutils-temp-syntax-table (make-char-table 'syntax-table nil))
-(modify-syntax-entry ?\' "\"" myutils-temp-syntax-table)
-(modify-syntax-entry ?\" "\"" myutils-temp-syntax-table)
-(modify-syntax-entry ?\{ "(" myutils-temp-syntax-table)
-(modify-syntax-entry ?\} ")" myutils-temp-syntax-table)
-(modify-syntax-entry ?\( "(" myutils-temp-syntax-table)
-(modify-syntax-entry ?\) ")" myutils-temp-syntax-table)
-(modify-syntax-entry ?\< "(" myutils-temp-syntax-table)
-(modify-syntax-entry ?\> ")" myutils-temp-syntax-table)
-(modify-syntax-entry ?\[ "(" myutils-temp-syntax-table)
-(modify-syntax-entry ?\] ")" myutils-temp-syntax-table)
-(modify-syntax-entry ?\\ "\\" myutils-temp-syntax-table)
+(defvar smart-mark-temp-syntax-table (make-char-table 'syntax-table nil))
+(modify-syntax-entry ?\' "\"" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\" "\"" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\{ "(" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\} ")" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\( "(" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\) ")" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\< "(" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\> ")" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\[ "(" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\] ")" smart-mark-temp-syntax-table)
+(modify-syntax-entry ?\\ "\\" smart-mark-temp-syntax-table)
 
 
 (defun smart-mark-1 (&optional adjust pos)
@@ -211,13 +211,10 @@ Try it to see the effect :)
              (setq c (read-char prompt))
 
              (when (= c ?\?)
-               (setq config (current-window-configuration))
-               (unwind-protect
-                   (progn
-                     (with-output-to-temp-buffer "*smart-mark*"
-                       (princ smart-mark-help-text)))
-                 (setq c (setq c (read-char-exclusive prompt)))
-                 (set-window-configuration config))
+               (save-window-excursion
+                 (with-output-to-temp-buffer "*smart-mark*"
+                   (princ smart-mark-help-text))
+                 (setq c (setq c (read-char-exclusive prompt))))
                (setq async t))
     
              (when (and (>= c ?0) (<= c ?9))
@@ -291,9 +288,9 @@ Try it to see the effect :)
                                       (unless (smart-mark-1 t pos)
                                         (goto-char pos)))))))
                  (cond (syntax-mod-need
-                        (set-char-table-parent myutils-temp-syntax-table (syntax-table))
+                        (set-char-table-parent smart-mark-temp-syntax-table (syntax-table))
                         (with-syntax-table
-                            myutils-temp-syntax-table
+                            smart-mark-temp-syntax-table
                           (s-n-m)))
                        (t
                         (s-n-m))))))))))
